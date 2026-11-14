@@ -17,7 +17,7 @@ use webapi::WebApi;
 use psst_core::cache::Cache;
 
 use crate::{
-    data::{AppState, Config},
+    data::{AppState, Config, CustomTheme},
     delegate::Delegate,
 };
 
@@ -38,6 +38,7 @@ fn main() {
 
     let paginated_limit = config.paginated_limit;
     let mut state = AppState::default_with_config(config.clone());
+    state.custom_theme = CustomTheme::load_default();
 
     if let Some(cache_dir) = Config::cache_dir() {
         match Cache::new(cache_dir) {
@@ -102,6 +103,8 @@ fn main() {
         delegate = Delegate::with_preferences(window.id);
         launcher = AppLauncher::with_window(window).configure_env(ui::theme::setup);
     };
+
+    ui::theme::spawn_watcher(launcher.get_external_handle());
 
     launcher
         .delegate(delegate)

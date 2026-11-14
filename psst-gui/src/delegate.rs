@@ -1,7 +1,7 @@
 use directories::UserDirs;
 use druid::{
     commands, AppDelegate, Application, Command, DelegateCtx, Env, Event, Handled, Target,
-    WindowDesc, WindowId,
+    WidgetExt, WindowDesc, WindowId,
 };
 use std::fs;
 use threadpool::ThreadPool;
@@ -16,7 +16,7 @@ use crate::{
     data::{AppState, Config},
     ui,
     webapi::WebApi,
-    widget::remote_image,
+    widget::{remote_image, ThemeScope},
 };
 
 pub struct Delegate {
@@ -113,7 +113,11 @@ impl Delegate {
                 id
             }
             None => {
-                let window = WindowDesc::new(ui::credits::credits_widget())
+                let window = WindowDesc::new(ThemeScope::new(
+                    ui::credits::credits_widget()
+                        .background(theme::WINDOW_BACKGROUND_COLOR)
+                        .expand(),
+                ))
                     .title("Track Credits")
                     .window_size((theme::grid(50.0), theme::grid(55.0)))
                     .resizable(false);
@@ -195,6 +199,9 @@ impl AppDelegate<AppState> for Delegate {
             Handled::No
         } else if cmd.is(crate::cmd::SHOW_ARTWORK) {
             self.show_artwork(ctx);
+            Handled::Yes
+        } else if let Some(custom_theme) = cmd.get(cmd::RELOAD_CUSTOM_THEME) {
+            data.custom_theme = custom_theme.clone();
             Handled::Yes
         } else if let Some((url, title)) = cmd.get(DOWNLOAD_ARTWORK) {
             let safe_title = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");

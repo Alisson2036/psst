@@ -1,4 +1,4 @@
-use crate::data::Track;
+use crate::data::{CustomTheme, Track};
 use druid::{Selector, WidgetId};
 use psst_core::{item_id::ItemId, player::item::PlaybackItem};
 use std::sync::Arc;
@@ -74,3 +74,6 @@ pub const LOAD_TRACK_CREDITS: Selector<Arc<Track>> = Selector::new("app.credits-
 
 // Artwork
 pub const SHOW_ARTWORK: Selector = Selector::new("app.show-artwork");
+
+// Theme
+pub const RELOAD_CUSTOM_THEME: Selector<CustomTheme> = Selector::new("app.reload-custom-theme");

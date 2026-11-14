@@ -12,6 +12,7 @@ mod recommend;
 mod search;
 mod show;
 mod slider_scroll_scale;
+pub mod theme;
 mod track;
 mod user;
 pub mod utils;
@@ -57,6 +58,7 @@ pub use crate::data::{
     search::{Search, SearchResults, SearchTopic},
     show::{Episode, EpisodeId, EpisodeLink, Show, ShowDetail, ShowEpisodes, ShowLink},
     slider_scroll_scale::SliderScrollScale,
+    theme::{CustomTheme, ThemeColor},
     track::{AudioAnalysis, Track, TrackId, TrackLines},
     user::{PublicUser, UserProfile},
     utils::{Cached, Float64, Image, Page},
@@ -72,6 +74,7 @@ pub struct AppState {
     pub nav: Nav,
     pub history: Vector<Nav>,
     pub config: Config,
+    pub custom_theme: CustomTheme,
     pub preferences: Preferences,
     pub playback: Playback,
     pub search: Search,
@@ -117,6 +120,7 @@ impl AppState {
             nav: Nav::Home,
             history: Vector::new(),
             config,
+            custom_theme: CustomTheme::default(),
             preferences: Preferences {
                 active: PreferencesTab::General,
                 cache: None,

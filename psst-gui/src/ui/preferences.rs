@@ -16,8 +16,8 @@ use druid::{
         Button, Controller, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment,
         RadioGroup, SizedBox, Slider, TextBox, ViewSwitcher,
     },
-    Color, Data, Env, Event, EventCtx, Insets, Lens, LensExt, LifeCycle, LifeCycleCtx, Selector,
-    Widget, WidgetExt,
+    Data, Env, Event, EventCtx, Insets, Lens, LensExt, LifeCycle, LifeCycleCtx, Selector, Widget,
+    WidgetExt,
 };
 use psst_core::{connection::Credentials, lastfm, oauth, session::SessionConfig};
 
@@ -191,6 +191,18 @@ fn general_tab_widget() -> impl Widget<AppState> {
             RadioGroup::column(vec![("Light", Theme::Light), ("Dark", Theme::Dark)])
                 .lens(AppState::config.then(Config::theme)),
         );
+
+    if let Some(theme_path) = Config::theme_path() {
+        col = col.with_spacer(theme::grid(1.0)).with_child(
+            Label::new(format!(
+                "Custom colors override: {}",
+                theme_path.to_string_lossy()
+            ))
+            .with_text_size(theme::TEXT_SIZE_SMALL)
+            .with_text_color(theme::PLACEHOLDER_COLOR)
+            .with_line_break_mode(LineBreaking::WordWrap),
+        );
+    }
 
     col = col.with_spacer(theme::grid(1.5));
 
@@ -434,7 +446,7 @@ fn account_tab_widget(tab: AccountTab) -> impl Widget<AppState> {
                     // Error arm remains the same
                     Label::dynamic(|err: &String, _| err.to_owned())
                         .with_text_size(theme::TEXT_SIZE_SMALL)
-                        .with_text_color(druid::Color::RED)
+                        .with_text_color(theme::RED)
                 },
             )
             .lens(
@@ -551,9 +563,9 @@ fn lastfm_disconnected_view() -> impl Widget<AppState> {
                 } else {
                     Label::new(msg.clone())
                         .with_text_color(if msg.starts_with("Connect") {
-                            druid::Color::GRAY
+                            theme::PLACEHOLDER_COLOR
                         } else {
-                            druid::Color::RED
+                            theme::RED
                         })
                         .boxed()
                 }
@@ -947,7 +959,7 @@ fn about_tab_widget() -> impl Widget<AppState> {
 
     let remote_url = Flex::row().with_child(Label::new("Source:   ")).with_child(
         Label::new(psst_core::REMOTE_URL)
-            .with_text_color(Color::rgb8(138, 180, 248))
+            .with_text_color(theme::BLUE_200)
             .on_left_click(|_, _, _, _| {
                 open::that(psst_core::REMOTE_URL).ok();
             }),

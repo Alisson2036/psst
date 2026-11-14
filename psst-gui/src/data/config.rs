@@ -104,6 +104,8 @@ impl Authentication {
 
 const APP_NAME: &str = "Psst";
 const CONFIG_FILENAME: &str = "config.json";
+const THEME_FILENAME: &str = "theme.json";
+const THEME_ENV_VAR: &str = "PSST_THEME";
 const PROXY_ENV_VAR: &str = "SOCKS_PROXY";
 
 #[derive(Clone, Debug, Data, Lens, Serialize, Deserialize)]
@@ -185,6 +187,15 @@ impl Config {
 
     fn config_path() -> Option<PathBuf> {
         Self::config_dir().map(|dir| dir.join(CONFIG_FILENAME))
+    }
+
+    pub fn theme_path() -> Option<PathBuf> {
+        if let Some(path) = env::var_os(THEME_ENV_VAR) {
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
+            }
+        }
+        Self::config_dir().map(|dir| dir.join(THEME_FILENAME))
     }
 
     pub fn load() -> Option<Config> {

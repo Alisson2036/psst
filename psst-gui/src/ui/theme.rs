@@ -1,8 +1,22 @@
-use druid::{Color, Env, FontDescriptor, FontFamily, FontWeight, Insets, Key, Size};
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
+
+use druid::{Color, Env, ExtEventSink, FontDescriptor, FontFamily, FontWeight, Insets, Key, Size, Target};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
+use psst_core::cache::mkdir_if_not_exists;
 
 pub use druid::theme::*;
 
-use crate::data::{AppState, Theme};
+use crate::{
+    cmd,
+    data::{AppState, Config, CustomTheme, Theme, ThemeColor},
+};
 
 pub fn grid(m: f64) -> f64 {
     GRID * m
@@ -47,6 +61,7 @@ pub fn setup(env: &mut Env, state: &AppState) {
         Theme::Light => setup_light_theme(env),
         Theme::Dark => setup_dark_theme(env),
     };
+    apply_palette_overrides(env, &state.custom_theme);
 
     env.set(WINDOW_BACKGROUND_COLOR, env.get(GREY_700));
     env.set(TEXT_COLOR, env.get(GREY_100));
@@ -126,6 +141,61 @@ pub fn setup(env: &mut Env, state: &AppState) {
     env.set(MENU_BUTTON_BG_INACTIVE, env.get(GREY_600));
     env.set(MENU_BUTTON_FG_ACTIVE, env.get(GREY_000));
     env.set(MENU_BUTTON_FG_INACTIVE, env.get(GREY_100));
+
+    apply_semantic_overrides(env, &state.custom_theme);
+}
+
+fn set_if_some(env: &mut Env, key: Key<Color>, color: Option<ThemeColor>) {
+    if let Some(color) = color {
+        env.set(key, color.to_druid_color());
+    }
+}
+
+fn apply_palette_overrides(env: &mut Env, custom: &CustomTheme) {
+    set_if_some(env, GREY_000, custom.grey_000);
+    set_if_some(env, GREY_100, custom.grey_100);
+    set_if_some(env, GREY_200, custom.grey_200);
+    set_if_some(env, GREY_300, custom.grey_300);
+    set_if_some(env, GREY_400, custom.grey_400);
+    set_if_some(env, GREY_500, custom.grey_500);
+    set_if_some(env, GREY_600, custom.grey_600);
+    set_if_some(env, GREY_700, custom.grey_700);
+    set_if_some(env, BLUE_100, custom.blue_100);
+    set_if_some(env, BLUE_200, custom.blue_200);
+    set_if_some(env, RED, custom.red);
+    set_if_some(env, LINK_HOT_COLOR, custom.link_hot_color);
+    set_if_some(env, LINK_ACTIVE_COLOR, custom.link_active_color);
+    set_if_some(env, LINK_COLD_COLOR, custom.link_cold_color);
+}
+
+fn apply_semantic_overrides(env: &mut Env, custom: &CustomTheme) {
+    set_if_some(env, WINDOW_BACKGROUND_COLOR, custom.window_background_color);
+    set_if_some(env, TEXT_COLOR, custom.text_color);
+    set_if_some(env, ICON_COLOR, custom.icon_color);
+    set_if_some(env, PLACEHOLDER_COLOR, custom.placeholder_color);
+    set_if_some(env, PRIMARY_LIGHT, custom.primary_light);
+    set_if_some(env, PRIMARY_DARK, custom.primary_dark);
+    set_if_some(env, BACKGROUND_LIGHT, custom.background_light);
+    set_if_some(env, BACKGROUND_DARK, custom.background_dark);
+    set_if_some(env, FOREGROUND_LIGHT, custom.foreground_light);
+    set_if_some(env, FOREGROUND_DARK, custom.foreground_dark);
+    set_if_some(env, BUTTON_LIGHT, custom.button_light);
+    set_if_some(env, BUTTON_DARK, custom.button_dark);
+    set_if_some(env, BORDER_LIGHT, custom.border_light);
+    set_if_some(env, BORDER_DARK, custom.border_dark);
+    set_if_some(
+        env,
+        SELECTED_TEXT_BACKGROUND_COLOR,
+        custom.selected_text_background_color,
+    );
+    set_if_some(env, SELECTION_TEXT_COLOR, custom.selection_text_color);
+    set_if_some(env, CURSOR_COLOR, custom.cursor_color);
+    set_if_some(env, SCROLLBAR_COLOR, custom.scrollbar_color);
+    set_if_some(env, SCROLLBAR_BORDER_COLOR, custom.scrollbar_border_color);
+    set_if_some(env, MENU_BUTTON_BG_ACTIVE, custom.menu_button_bg_active);
+    set_if_some(env, MENU_BUTTON_BG_INACTIVE, custom.menu_button_bg_inactive);
+    set_if_some(env, MENU_BUTTON_FG_ACTIVE, custom.menu_button_fg_active);
+    set_if_some(env, MENU_BUTTON_FG_INACTIVE, custom.menu_button_fg_inactive);
 }
 
 fn setup_light_theme(env: &mut Env) {
@@ -164,4 +234,260 @@ fn setup_dark_theme(env: &mut Env) {
     env.set(LINK_HOT_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.05));
     env.set(LINK_ACTIVE_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.025));
     env.set(LINK_COLD_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.0));
+}
+
+pub fn spawn_watcher(event_sink: ExtEventSink) {
+    let Some(theme_path) = Config::theme_path() else {
+        log::warn!("Cannot watch custom theme: failed to resolve theme path");
+        return;
+    };
+
+    if let Some(parent) = theme_path.parent() {
+        if let Err(err) = mkdir_if_not_exists(parent) {
+            log::warn!(
+                "Failed to create directory {:?} for theme watcher: {err}",
+                parent
+            );
+        }
+    }
+
+    thread::Builder::new()
+        .name("theme_watcher".into())
+        .spawn(move || watch_theme_loop(theme_path, event_sink))
+        .expect("Failed to spawn theme watcher thread");
+}
+
+fn watch_theme_loop(theme_path: PathBuf, event_sink: ExtEventSink) {
+    const DEBOUNCE_WINDOW: Duration = Duration::from_millis(50);
+
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut watcher = match notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    }) {
+        Ok(watcher) => watcher,
+        Err(err) => {
+            log::error!("Failed to initialize theme file watcher: {err}");
+            return;
+        }
+    };
+
+    let mut watched_dirs = HashSet::new();
+    sync_watched_dirs(&mut watcher, &mut watched_dirs, &theme_path);
+    log::info!("Watching custom theme file: {:?}", theme_path);
+
+    let mut last_loaded: Option<CustomTheme> = None;
+
+    while let Ok(res) = rx.recv() {
+        let mut should_reload = event_matches_target(&res, &theme_path);
+
+        // Drain bursty editor/atomic-save events within a short debounce window.
+        while let Ok(next_res) = rx.recv_timeout(DEBOUNCE_WINDOW) {
+            if event_matches_target(&next_res, &theme_path) {
+                should_reload = true;
+            }
+        }
+
+        if !should_reload {
+            continue;
+        }
+
+        sync_watched_dirs(&mut watcher, &mut watched_dirs, &theme_path);
+
+        if let Some(new_theme) = load_theme_with_retry(&theme_path) {
+            if last_loaded.as_ref() != Some(&new_theme) {
+                last_loaded = Some(new_theme.clone());
+                if event_sink
+                    .submit_command(cmd::RELOAD_CUSTOM_THEME, new_theme, Target::Global)
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn sync_watched_dirs(
+    watcher: &mut dyn Watcher,
+    watched_dirs: &mut HashSet<PathBuf>,
+    theme_path: &Path,
+) {
+    let mut candidates = Vec::new();
+    if let Some(parent) = theme_path.parent() {
+        candidates.push(parent.to_path_buf());
+    }
+    if let Ok(canonical) = fs::canonicalize(theme_path) {
+        if let Some(parent) = canonical.parent() {
+            candidates.push(parent.to_path_buf());
+        }
+    }
+
+    for dir in candidates {
+        if !watched_dirs.contains(&dir) && dir.exists() {
+            match watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    watched_dirs.insert(dir);
+                }
+                Err(err) => {
+                    log::warn!("Failed to watch directory {:?} for theme changes: {err}", dir);
+                }
+            }
+        }
+    }
+}
+
+fn event_matches_target(res: &notify::Result<Event>, theme_path: &Path) -> bool {
+    let event = match res {
+        Ok(event) => event,
+        Err(err) => {
+            log::warn!("Theme watcher error: {err}");
+            return false;
+        }
+    };
+
+    if matches!(event.kind, EventKind::Access(_)) {
+        return false;
+    }
+
+    let primary_name = theme_path.file_name();
+    let canonical_path = fs::canonicalize(theme_path).ok();
+    let canonical_name = canonical_path.as_deref().and_then(Path::file_name);
+
+    event_paths_match(&event.paths, primary_name, canonical_name)
+}
+
+fn event_paths_match(
+    paths: &[PathBuf],
+    primary_name: Option<&OsStr>,
+    canonical_name: Option<&OsStr>,
+) -> bool {
+    if paths.is_empty() {
+        return true;
+    }
+
+    paths.iter().any(|path| {
+        let name = path.file_name();
+        (primary_name.is_some() && name == primary_name)
+            || (canonical_name.is_some() && name == canonical_name)
+    })
+}
+
+fn load_theme_with_retry(theme_path: &Path) -> Option<CustomTheme> {
+    if !theme_path.exists() {
+        log::info!("Custom theme file removed ({:?}), reverting to base theme", theme_path);
+        return Some(CustomTheme::default());
+    }
+
+    match CustomTheme::load_from_path(theme_path) {
+        Ok(theme) => Some(theme),
+        Err(first_err) => {
+            // Non-atomic writers may temporarily leave an empty/partial file.
+            thread::sleep(Duration::from_millis(80));
+            if !theme_path.exists() {
+                return Some(CustomTheme::default());
+            }
+            match CustomTheme::load_from_path(theme_path) {
+                Ok(theme) => Some(theme),
+                Err(_) => {
+                    log::warn!("{first_err}");
+                    None
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+    use std::io::Write;
+
+    #[test]
+    fn setup_applies_palette_and_semantic_overrides_over_base_theme() {
+        let mut state = AppState::default_with_config(Config::default());
+        state.config.theme = Theme::Dark;
+        state.custom_theme.grey_700 = Some(ThemeColor::from_rgba8(0x11, 0x22, 0x33, 0xff));
+        state.custom_theme.window_background_color =
+            Some(ThemeColor::from_rgba8(0x44, 0x55, 0x66, 0xff));
+
+        let mut env = Env::empty();
+        setup(&mut env, &state);
+
+        // Derived key inherits overridden palette color grey_700.
+        assert_eq!(
+            env.get(BACKGROUND_LIGHT),
+            Color::rgb8(0x11, 0x22, 0x33)
+        );
+        assert_eq!(
+            env.get(BUTTON_DARK),
+            Color::rgb8(0x11, 0x22, 0x33)
+        );
+        // Explicit semantic override takes precedence over derived window_background_color.
+        assert_eq!(
+            env.get(WINDOW_BACKGROUND_COLOR),
+            Color::rgb8(0x44, 0x55, 0x66)
+        );
+
+        // Clearing overrides restores Dark theme defaults.
+        state.custom_theme = CustomTheme::default();
+        setup(&mut env, &state);
+        assert_eq!(env.get(GREY_700), Color::grey8(0x28));
+        assert_eq!(env.get(WINDOW_BACKGROUND_COLOR), Color::grey8(0x28));
+        assert_eq!(env.get(BACKGROUND_LIGHT), Color::grey8(0x28));
+    }
+
+    #[test]
+    fn event_filter_matches_theme_filename_and_ignores_access() {
+        let target = PathBuf::from("/tmp/psst/theme.json");
+        let other = PathBuf::from("/tmp/psst/config.json");
+
+        let modify_target = Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(target.clone()));
+        assert!(event_matches_target(&modify_target, &target));
+
+        let modify_other = Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(other));
+        assert!(!event_matches_target(&modify_other, &target));
+
+        let access_target = Ok(Event::new(EventKind::Access(AccessKind::Any)).add_path(target.clone()));
+        assert!(!event_matches_target(&access_target, &target));
+
+        let create_target = Ok(Event::new(EventKind::Create(CreateKind::File)).add_path(target.clone()));
+        assert!(event_matches_target(&create_target, &target));
+
+        let remove_target = Ok(Event::new(EventKind::Remove(RemoveKind::File)).add_path(target.clone()));
+        assert!(event_matches_target(&remove_target, &target));
+    }
+
+    #[test]
+    fn load_theme_with_retry_handles_missing_valid_and_invalid_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "psst-theme-watch-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("theme.json");
+
+        // Missing file reverts to default (empty) overrides.
+        assert_eq!(load_theme_with_retry(&path), Some(CustomTheme::default()));
+
+        // Valid JSON loads overrides.
+        {
+            let mut file = fs::File::create(&path).unwrap();
+            writeln!(file, r##"{{"blue_200": "#a6e3a1"}}"##).unwrap();
+        }
+        let loaded = load_theme_with_retry(&path).unwrap();
+        assert_eq!(
+            loaded.blue_200,
+            Some(ThemeColor::from_rgba8(0xa6, 0xe3, 0xa1, 0xff))
+        );
+
+        // Invalid JSON preserves active theme by returning None.
+        {
+            let mut file = fs::File::create(&path).unwrap();
+            writeln!(file, "{{invalid").unwrap();
+        }
+        assert_eq!(load_theme_with_retry(&path), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -1,15 +1,15 @@
 use crate::{data::AppState, ui::theme};
-use druid::widget::prelude::*;
+use druid::{widget::prelude::*, Point, WidgetPod};
 
 pub struct ThemeScope<W> {
-    inner: W,
+    inner: WidgetPod<AppState, W>,
     cached_env: Option<Env>,
 }
 
-impl<W> ThemeScope<W> {
+impl<W: Widget<AppState>> ThemeScope<W> {
     pub fn new(inner: W) -> Self {
         Self {
-            inner,
+            inner: WidgetPod::new(inner),
             cached_env: None,
         }
     }
@@ -36,13 +36,15 @@ impl<W: Widget<AppState>> Widget<AppState> for ThemeScope<W> {
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, old_data: &AppState, data: &AppState, env: &Env) {
-        if !data.config.theme.same(&old_data.config.theme) {
+        if !data.config.theme.same(&old_data.config.theme)
+            || !data.custom_theme.same(&old_data.custom_theme)
+        {
             self.set_env(data, env);
             ctx.request_layout();
             ctx.request_paint();
         }
         self.inner
-            .update(ctx, old_data, data, self.cached_env.as_ref().unwrap_or(env));
+            .update(ctx, data, self.cached_env.as_ref().unwrap_or(env));
     }
 
     fn layout(
@@ -52,8 +54,11 @@ impl<W: Widget<AppState>> Widget<AppState> for ThemeScope<W> {
         data: &AppState,
         env: &Env,
     ) -> Size {
-        self.inner
-            .layout(ctx, bc, data, self.cached_env.as_ref().unwrap_or(env))
+        let size =
+            self.inner
+                .layout(ctx, bc, data, self.cached_env.as_ref().unwrap_or(env));
+        self.inner.set_origin(ctx, Point::ORIGIN);
+        size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &AppState, env: &Env) {

@@ -200,16 +200,18 @@ impl<W: Widget<AppState>> Controller<AppState, W> for ArtworkController {
 }
 
 pub fn artwork_widget() -> impl Widget<AppState> {
-    RemoteImage::new(utils::placeholder_widget(), move |data: &AppState, _| {
-        data.playback
-            .now_playing
-            .as_ref()
-            .and_then(|np| np.cover_image_url(512.0, 512.0))
-            .map(|url| url.into())
-    })
-    .expand()
-    .background(theme::BACKGROUND_DARK)
-    .controller(ArtworkController)
+    ThemeScope::new(
+        RemoteImage::new(utils::placeholder_widget(), move |data: &AppState, _| {
+            data.playback
+                .now_playing
+                .as_ref()
+                .and_then(|np| np.cover_image_url(512.0, 512.0))
+                .map(|url| url.into())
+        })
+        .expand()
+        .background(theme::BACKGROUND_DARK)
+        .controller(ArtworkController),
+    )
 }
 
 fn root_widget() -> impl Widget<AppState> {
